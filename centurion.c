@@ -703,7 +703,7 @@ void usage(void)
 		"\n"
 		"Options:\n"
 		" -b           bootfile is raw binary\n"
-		" -R           run a raw binary without loading system firmware\n"
+		" -R           run a raw binary without firmware or real-time pacing\n"
 		" -A <addr>    bootfile will be loaded at offset <addr>\n"
 		" -E <addr>    entry point for binary"
 		" -d           emulate DIAG card\n"
@@ -838,8 +838,10 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	throttle_init();
-	throttle_set_speed(1.0);
+	if (!skip_firmware) {
+		throttle_init();
+		throttle_set_speed(1.0);
+	}
 
 	while (!emulator_done) {
 		cpu6_execute_one(trace & TRACE_CPU);
@@ -885,7 +887,8 @@ int main(int argc, char *argv[])
 		mux_poll(trace & TRACE_MUX);
 
 		run_scheduler(cpu_timestamp_ns, trace & TRACE_SCHEDULER);
-		throttle_emulation(cpu_timestamp_ns);
+		if (!skip_firmware)
+			throttle_emulation(cpu_timestamp_ns);
 
 		instruction_count++;
 		if (terminate_at && instruction_count >= terminate_at) {

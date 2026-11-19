@@ -9,7 +9,8 @@ CPU6 multiply and divide operand encodings, and implements the multiword
 division forms exercised by the tests.
 
 The distribution uses `-R` with raw CPU6 test programs to start directly
-at the program entry point without loading boot or diagnostic ROM files.
+at the program entry point without boot ROMs or wall-clock pacing.
+Peripheral scheduling still follows emulated CPU time.
 The emulator builds on demand for the compiler regression suites.
 
 [Upstream license](LICENCE)
