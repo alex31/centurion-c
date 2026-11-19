@@ -358,6 +358,19 @@ void disassemble(unsigned op)
                 stack_op("POP", rpc);
                 return;
         }
+	if (op == 0x77 || op == 0x78) {
+		uint8_t mode = get8d(rpc);
+		const char *name = op == 0x77 ? "MUL" : "DIV";
+		const char *src = r16name((mode >> 4) & 14);
+		const char *dst = r16name(mode & 14);
+		switch (mode & 0x11) {
+		case 0: fprintf(stderr, "%s %s,%s\n", name, src, dst); break;
+		case 1: fprintf(stderr, "%s %s,(0x%04X),%s\n", name, src, get16d(rpc + 1), dst); break;
+		case 0x10: fprintf(stderr, "%s %s,0x%04X,%s\n", name, src, get16d(rpc + 1), dst); break;
+		case 0x11: fprintf(stderr, "%s 0x%04X(%s),%s\n", name, get16d(rpc + 1), src, dst); break;
+		}
+		return;
+	}
 	if (op < 0x80) {
 		if (op == 0x76) {
 			fputs("SYSCALL?\n", stderr);

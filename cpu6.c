@@ -324,7 +324,7 @@ static uint16_t get_twobit(unsigned mode, unsigned idx, unsigned len) {
 	case 2:
 		// EA <- R
 		// This mode is complicated because it tries to merge two mode 2s into a single byte
-		if (idx == 1 && mode == 0xa) {
+		if (idx == 1 && (mode & 0x0f) == 0xa) {
 			// previous twobit already fetched our regbyte
 			regs = twobit_cached_reg;
 		} else {
@@ -710,6 +710,58 @@ static int bignum_sub(int a_len, int b_len, uint64_t a_addr, uint16_t b_addr, in
  * Valid sizes are 1 to 16 bytes
  * Some subops may take extra arguments via implicit registers
  */
+static uint64_t bignum_read(uint16_t address, unsigned size)
+{
+	uint64_t value = 0;
+	while (size--) value = (value << 8) | mmu_mem_read8(address++);
+	return value;
+}
+
+static void bignum_write(uint16_t address, unsigned size, uint64_t value)
+{
+	while (size) {
+		mmu_mem_write8(address + --size, value);
+		value >>= 8;
+	}
+}
+
+/* Signed D/DRM with up to eight bytes per operand. The division is performed
+   on unsigned magnitudes, including INT64_MIN, to avoid host signed UB. */
+static int bignum_div(unsigned source_size, unsigned dest_size,
+                     uint16_t source, uint16_t dest, int with_remainder)
+{
+	if (source_size > 8 || dest_size > 8) {
+		fprintf(stderr, "Unsupported big division width at %04X\n", exec_pc);
+		exit(1);
+	}
+	uint16_t remainder_address = regpair_read(A);
+	uint64_t source_mask = UINT64_MAX >> (64 - source_size * 8);
+	uint64_t dest_mask = UINT64_MAX >> (64 - dest_size * 8);
+	uint64_t source_sign = UINT64_C(1) << (source_size * 8 - 1);
+	uint64_t dest_sign = UINT64_C(1) << (dest_size * 8 - 1);
+	uint64_t divisor = bignum_read(source, source_size);
+	uint64_t dividend = bignum_read(dest, dest_size);
+	int dividend_negative = (dividend & dest_sign) != 0;
+	int quotient_negative = dividend_negative != ((divisor & source_sign) != 0);
+	regpair_write(P, pc);
+	if (!divisor) { alu_out |= ALU_F; return 0; }
+	if (dividend_negative) dividend = (0 - dividend) & dest_mask;
+	if (divisor & source_sign) divisor = (0 - divisor) & source_mask;
+	uint64_t quotient = dividend / divisor, remainder = dividend % divisor;
+	uint64_t result = (quotient_negative ? 0 - quotient : quotient) & dest_mask;
+	bignum_write(dest, dest_size, result);
+	if (with_remainder)
+		bignum_write(remainder_address, source_size,
+		             (dividend_negative ? 0 - remainder : remainder) & source_mask);
+	/* Successful big division preserves the previous F, unlike word DIV. */
+	alu_out &= ~(ALU_L | ALU_M | ALU_V);
+	/* The microcode also preserves F for the wrapped MIN / -1 result. */
+	if (result & dest_sign) alu_out |= ALU_M;
+	if (!result) alu_out |= ALU_V;
+	if (with_remainder && !remainder) alu_out |= ALU_L;
+	return 0;
+}
+
 static int bignum_op(void) {
 	unsigned sizes = fetch();
 	unsigned a_size = (sizes >> 4) + 1;
@@ -819,6 +871,9 @@ static int bignum_op(void) {
 		return bignum_sub(a_size, b_size, a_addr, b_addr, 1);
 	case 2: // CMPBIG
 		return bignum_sub(a_size, b_size, a_addr, b_addr, 0);
+	case 6: // D
+	case 7: // DRM (remainder at A)
+		return bignum_div(a_size, b_size, a_addr, b_addr, (mode >> 4) == 7);
 	default:
 		fprintf(stderr, "Unsupported 46 Bignum op %i\n", mode >> 4);
 		exit(1);
@@ -1237,7 +1292,7 @@ static int mov(unsigned dst, unsigned src)
 
 static uint16_t inc16(uint16_t a, uint16_t imm)
 {
-	arith_flags(a + imm, a, imm);
+	arith_flags16(a + imm, a, imm);
 	return a + imm;
 }
 
@@ -1347,39 +1402,37 @@ static uint16_t rlc16(uint16_t a, uint16_t count)
 static int mul16(unsigned dsta, unsigned a, unsigned b)
 {
 	uint32_t r = (uint32_t)a * (uint32_t)b;
-	unsigned expected_sign = (a ^ b) & 0x8000;
-	unsigned sign = r & 0x8000;
-
-	mmu_mem_write16(dsta, r & 0xffff);
-
-	// These flags are a total guess
-	alu_out &= ~(ALU_F | ALU_M | ALU_V);
-	if (sign)
-		alu_out |= ALU_M;
-	if ((r & 0xffff) == 0)
-		alu_out |= ALU_V;
-	if (sign != expected_sign || r > 0xffff)
-		alu_out |= ALU_F;
+	/* A/X/Z/C select a word pair; B/Y/S/P keep only the low word.
+	   The microcode tests the high result word first, then the low word
+	   only when the high word is zero. This also applies to partial stores. */
+	if (!(dsta & 2)) {
+		mmu_mem_write16(dsta, r >> 16);
+		dsta += 2;
+	}
+	mmu_mem_write16(dsta, r);
+	alu_out &= ~(ALU_L | ALU_F | ALU_M | ALU_V);
+	logic_flags16(r >> 16 ? r >> 16 : r);
+	if (r >> 16) alu_out |= ALU_F;
 
 	return 0;
 }
 
 static int div16(unsigned dsta, unsigned a, unsigned b)
 {
-	uint32_t r = (uint32_t)a / (uint32_t)b;
-	unsigned expected_sign = (a ^ b) & 0x8000;
-	unsigned sign = r & 0x8000;
-
-	mmu_mem_write16(dsta, r & 0xffff);
-
-	// These flags are a total guess
-	alu_out &= ~(ALU_F | ALU_M | ALU_V);
-	if (sign)
-		alu_out |= ALU_M;
-	if ((r & 0xffff) == 0)
-		alu_out |= ALU_V;
-	if (sign != expected_sign || r > 0xffff)
+	/* Zero divisor leaves registers and the other condition flags intact. */
+	if (!b) {
 		alu_out |= ALU_F;
+		return 0;
+	}
+	uint16_t quotient = a / b, remainder = a % b;
+	if (!(dsta & 2)) {
+		mmu_mem_write16(dsta, remainder);
+		dsta += 2;
+	}
+	mmu_mem_write16(dsta, quotient);
+	alu_out &= ~(ALU_L | ALU_F | ALU_M | ALU_V);
+	logic_flags16(quotient);
+	if (remainder) alu_out |= ALU_L;
 
 	return 0;
 }
@@ -2354,8 +2407,6 @@ static int muldiv_op() {
 	uint16_t b;
 	uint16_t dsta;
 
-	// This is the same as alu5x
-
 	dst = fetch();
 	src = dst >> 4;
 	b = regpair_read(src & 0x0E);
@@ -2365,19 +2416,17 @@ static int muldiv_op() {
 	case 0x00: // dst_reg <- src_reg
 		break;
 	case 0x01: // dst_reg <- src_reg OP (direct)
-				// mov takes (direct)
+		a = b;
 		addr = fetch16();
 		b = mmu_mem_read16(addr);
 		break;
 	case 0x10: // dst_reg <- src_reg OP literal
-				// mov takes literal
+		a = b;
 		b = fetch16();
 		break;
-	case 0x11: // dst_reg <- (src_reg + disp16) OP dst_reg
-				// mov takes (src_reg + disp16)
+	case 0x11: // dst_reg <- dst_reg OP (src_reg + disp16)
 		addr = fetch16() + b;
-		b = a;
-		a = mmu_mem_read16(addr);
+		b = mmu_mem_read16(addr);
 		break;
 	}
 

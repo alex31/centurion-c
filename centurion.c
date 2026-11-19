@@ -671,6 +671,29 @@ static void load_rom(const char *name, uint32_t addr, uint16_t len)
 	fclose(fp);
 }
 
+/* Firmware is distributed separately.  A launcher can point to it without
+ * changing the working directory used for disk and program paths. */
+static void load_firmware(const char *name, uint32_t addr, uint16_t len)
+{
+	const char *dir = getenv("CENTURION_ROM_DIR");
+	char *path;
+	size_t size;
+
+	if (dir == NULL || *dir == '\0') {
+		load_rom(name, addr, len);
+		return;
+	}
+	size = strlen(dir) + strlen(name) + 2;
+	path = malloc(size);
+	if (path == NULL) {
+		perror("malloc");
+		exit(1);
+	}
+	snprintf(path, size, "%s/%s", dir, name);
+	load_rom(path, addr, len);
+	free(path);
+}
+
 void usage(void)
 {
 	fprintf(stderr,
@@ -680,6 +703,7 @@ void usage(void)
 		"\n"
 		"Options:\n"
 		" -b           bootfile is raw binary\n"
+		" -R           run a raw binary without loading system firmware\n"
 		" -A <addr>    bootfile will be loaded at offset <addr>\n"
 		" -E <addr>    entry point for binary"
 		" -d           emulate DIAG card\n"
@@ -708,6 +732,7 @@ int main(int argc, char *argv[])
 {
 	int opt;
 	unsigned binary = 0;
+	unsigned skip_firmware = 0;
 	unsigned port = 0;
 	long long terminate_at = 0;
 	long long instruction_count = 0;
@@ -717,7 +742,7 @@ int main(int argc, char *argv[])
 
 	mux_init();
 
-	while ((opt = getopt(argc, argv, "b::A:E:dFl:s:S:t:T:")) != -1) {
+	while ((opt = getopt(argc, argv, "b::A:E:dFl:Rs:S:t:T:")) != -1) {
 		switch (opt) {
 		case 'b':
 			binary = 1;
@@ -727,6 +752,9 @@ int main(int argc, char *argv[])
 			break;
 		case 'E':
 			entry_addr = parse_address(optarg, "Entry");
+			break;
+		case 'R':
+			skip_firmware = 1;
 			break;
 		case 'd':
 			diag = 1;
@@ -758,7 +786,7 @@ int main(int argc, char *argv[])
 	if (optind < argc)
 		boot_file = argv[optind++];
 
-	if (optind < argc)
+	if (optind < argc || (skip_firmware && (!binary || boot_file == NULL || diag)))
 		usage();
 
 	if (port == 0)
@@ -766,12 +794,13 @@ int main(int argc, char *argv[])
 	else
 		net_init(port);
 
-	load_rom("bootstrap_unscrambled.bin", 0x3FC00, 0x0200);
+	if (!skip_firmware)
+		load_firmware("bootstrap_unscrambled.bin", 0x3FC00, 0x0200);
 	if (diag) {
-		load_rom("Diag_F1_Rev_1.0.BIN", 0x08000, 0x0800);
-		load_rom("Diag_F2_Rev_1.0.BIN", 0x08800, 0x0800);
-		load_rom("Diag_F3_Rev_1.0.BIN", 0x09000, 0x0800);
-		load_rom("Diag_F4_1133CMD.BIN", 0x09800, 0x0800);
+		load_firmware("Diag_F1_Rev_1.0.BIN", 0x08000, 0x0800);
+		load_firmware("Diag_F2_Rev_1.0.BIN", 0x08800, 0x0800);
+		load_firmware("Diag_F3_Rev_1.0.BIN", 0x09000, 0x0800);
+		load_firmware("Diag_F4_1133CMD.BIN", 0x09800, 0x0800);
 	}
 
 	dsk_init();
