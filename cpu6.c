@@ -1310,16 +1310,24 @@ static uint16_t dec16(uint16_t a, uint16_t imm)
 /* Assume behaviour matches CLR */
 static uint16_t clr16(uint16_t a, uint16_t imm)
 {
-	alu_out &= ~(ALU_F | ALU_L | ALU_M);
-/*	if (imm == 0) */
+	alu_out &= ~(ALU_F | ALU_L | ALU_M | ALU_V);
+	if (imm == 0)
 		alu_out |= ALU_V;
 	return imm;
 }
 
 static uint16_t not16(uint16_t a, uint16_t imm)
 {
-	uint16_t r = (~a) + imm;
-	logic_flags16(r);
+	uint16_t inv = ~a;
+	uint16_t r = inv + imm;
+	if (imm == 0) {
+		logic_flags16(r);
+	} else {
+		arith_flags16(r, inv, imm);
+		alu_out &= ~ALU_L;
+		if (((unsigned)inv + imm) & 0x10000)
+			alu_out |= ALU_L;
+	}
 	return r;
 }
 
@@ -2333,22 +2341,23 @@ static int alu5x_op(void)
 		a = regpair_read(dst & 0XE);
 		if (op <= 0x55) {
 			switch(dst & 0x11) {
-			case 0x00: // dst_reg <- src_reg
+			case 0x00: // dst_reg <- src_reg OP dst_reg
 				break;
-			case 0x01: // dst_reg <- src_reg OP (direct)
+			case 0x01: // dst_reg <- (direct) OP src_reg
 				       // mov takes (direct)
+				a = b;
 				addr = fetch16();
 				movv = b = mmu_mem_read16(addr);
 				break;
-			case 0x10: // dst_reg <- src_reg OP literal
+			case 0x10: // dst_reg <- literal OP src_reg
 				       // mov takes literal
+				a = b;
 				movv = b = fetch16();
 				break;
 			case 0x11: // dst_reg <- (src_reg + disp16) OP dst_reg
 				       // mov takes (src_reg + disp16)
 				addr = fetch16() + b;
-				b = a;
-				movv = a = mmu_mem_read16(addr);
+				movv = b = mmu_mem_read16(addr);
 				break;
 			}
 		}
