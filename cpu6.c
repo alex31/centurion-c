@@ -1091,44 +1091,36 @@ static int inc(unsigned reg, unsigned val)
 	return 0;
 }
 
-/*
- *	This one is a bit strange
- *
- *	FF->0 expects !F !L M
- *
- */
 static int dec(unsigned reg, unsigned val)
 {
-	uint8_t r = reg_read(reg) - val;
+	uint8_t a = reg_read(reg);
+	uint8_t r = a - val;
 	reg_write(reg, r);
-	alu_out &= ~(ALU_L | ALU_V | ALU_M | ALU_F);
-	if (r == 0)
-		alu_out |= ALU_V;
-	if (r & 0x80)
-		alu_out |= ALU_M;
+	sub_flags(r, a, val);
 	return 0;
 }
 
 static int clr(unsigned reg, unsigned v)
 {
 	reg_write(reg, v);
-	alu_out &= ~(ALU_F | ALU_L | ALU_M);
-	if (v == 0)
-		alu_out |= ALU_V;
-	else
-		/* Gets us past the tests but is probably wrong */
-		alu_out ^= ALU_V;
+	alu_out &= ~(ALU_F | ALU_L);
+	logic_flags(v);
 	return 0;
 }
 
-/*
- *	Sets all the flags but rule not clear
- */
 static int not(unsigned reg, unsigned val)
 {
-	uint8_t r = ~reg_read(reg) + val;
+	uint8_t inv = ~reg_read(reg);
+	unsigned r = inv + val;
 	reg_write(reg, r);
-	logic_flags(r);
+	if (val) {
+		arith_flags(r, inv, val);
+		alu_out &= ~ALU_L;
+		if (r & 0x100)
+			alu_out |= ALU_L;
+	} else {
+		logic_flags(r);
+	}
 	return 0;
 }
 
@@ -1299,11 +1291,7 @@ static uint16_t inc16(uint16_t a, uint16_t imm)
 static uint16_t dec16(uint16_t a, uint16_t imm)
 {
 	uint16_t r = a - imm;
-	alu_out &= ~(ALU_L | ALU_V | ALU_M | ALU_F);
-	if ((r & 0xFFFF) == 0)
-		alu_out |= ALU_V;
-	if (r & 0x8000)
-		alu_out |= ALU_M;
+	sub_flags16(r, a, imm);
 	return r;
 }
 
@@ -1511,6 +1499,9 @@ static uint16_t indexed_address(unsigned size)
 
 	if (idx & 0x08)
 		offset = fetch();
+	/* Indirect auto-index advances over a word-sized pointer. */
+	if (idx & 0x04)
+		size = 2;
 	switch (idx & 0x03) {
 	case 0:
 		addr = regpair_read(r) + offset;
