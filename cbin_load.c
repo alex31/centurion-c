@@ -13,7 +13,7 @@ static uint16_t read_word(struct cbin_record* record, size_t offset) {
 
 // Type CBIN_DATA
 static void load_data(uint16_t *load_offset, struct cbin_record* record) {
-    if (record->addr == 0x004c && record->len > 0x1b) {
+    if (record->addr == 0x004c && record->len >= 0x1d) {
         // This appears to be a convention for the old table loader.
         // Seems it can't do multiple sectors, or fixups. So intended for
         // tape loading start with a single sector replacement loader,
@@ -48,7 +48,7 @@ static void apply_fixups(uint16_t load_offset, struct cbin_record* record) {
 }
 
 // Loads a Centurion binary file directly into memory
-uint16_t cbin_load(const char *name, uint16_t load_offset) {
+uint16_t cbin_load(const char *name, uint16_t load_offset, uint16_t entry_override) {
     uint16_t entry_addr = 0;
     struct cbin_record* record = NULL;
 
@@ -70,6 +70,7 @@ uint16_t cbin_load(const char *name, uint16_t load_offset) {
             if (record->len % 2 == 1){
                 fprintf(stderr, "FIXUPS record must have even length");
                 cbin_error(cbin);
+                break;
             }
             apply_fixups(load_offset, record);
             break;
@@ -79,6 +80,7 @@ uint16_t cbin_load(const char *name, uint16_t load_offset) {
         }
     }
     // Finished loading
+    if (entry_override) entry_addr = entry_override;
     if (entry_addr && cbin_finished(cbin)) {
         printf("Centurion Binary %s loaded; entry at %04hx\n\n", name, entry_addr);
         cbin_free(cbin);

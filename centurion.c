@@ -3,6 +3,7 @@
  */
 
 #include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -652,7 +653,7 @@ void halt_system(void)
 	emulator_done = 1;
 }
 
-static void load_rom(const char *name, uint32_t addr, uint16_t len)
+static void load_rom(const char *name, uint32_t addr, size_t len)
 {
 	FILE *fp = fopen(name, "rb");
 	if (fp == NULL) {
@@ -660,9 +661,13 @@ static void load_rom(const char *name, uint32_t addr, uint16_t len)
 		exit(1);
 	}
 	if (len == 0) {
-		fseek(fp, 0L, SEEK_END);
-		len = ftell(fp);
-		rewind(fp);
+		long size;
+		if (fseek(fp, 0, SEEK_END) || (size = ftell(fp)) <= 0 ||
+		    (unsigned long)size > sizeof(mem) - addr || fseek(fp, 0, SEEK_SET)) {
+			fprintf(stderr, "%s: invalid raw binary size\n", name);
+			exit(1);
+		}
+		len = (size_t)size;
 	}
 	if (fread(mem + addr, len, 1, fp) != 1) {
 		fprintf(stderr, "%s: read error.\n", name);
@@ -705,27 +710,29 @@ void usage(void)
 		" -b           bootfile is raw binary\n"
 		" -R           run a raw binary without firmware or real-time pacing\n"
 		" -A <addr>    bootfile will be loaded at offset <addr>\n"
-		" -E <addr>    entry point for binary"
+		" -E <addr>    entry point for binary\n"
 		" -d           emulate DIAG card\n"
 		" -F           emulate a finch drive\n"
 		" -l <port>    Listen for telnet on the given <port> number\n"
 		" -s <value>   set CPU switches as a decimal value. Switch 1-4 are Sense\n"
 		" -S <value>   set diag switches as decimal value (only effective with `-d`)\n"
-		" -t <value>   enable enable system trace to stderr. See readme for values\n"
+		" -t <value>   enable system trace to stderr. See readme for values\n"
 		" -T <value>   Exit after executing <value> instructions\n"
 	);
 	exit(1);
 }
 
-uint16_t parse_address(char *arg, char* arg_name) {
-	char* end_ptr = NULL;
-
-	uint16_t load_addr = strtoul(arg, &end_ptr, 16);
-	if (load_addr < 0x100 || end_ptr == NULL) {
-		fprintf(stderr, "%s address not valid\n", arg_name);
+static long long parse_number(const char *arg, const char *label, int base,
+			      long long minimum, long long maximum)
+{
+	char *end;
+	errno = 0;
+	long long value = strtoll(arg, &end, base);
+	if (errno || end == arg || *end || value < minimum || value > maximum) {
+		fprintf(stderr, "%s not valid: %s\n", label, arg);
 		exit(1);
 	}
-	return load_addr;
+	return value;
 }
 
 int main(int argc, char *argv[])
@@ -742,16 +749,16 @@ int main(int argc, char *argv[])
 
 	mux_init();
 
-	while ((opt = getopt(argc, argv, "b::A:E:dFl:Rs:S:t:T:")) != -1) {
+	while ((opt = getopt(argc, argv, "bA:E:dFl:Rs:S:t:T:")) != -1) {
 		switch (opt) {
 		case 'b':
 			binary = 1;
 			break;
 		case 'A':
-			load_addr = parse_address(optarg, "Load");
+			load_addr = parse_number(optarg, "Load address", 16, 0x100, UINT16_MAX);
 			break;
 		case 'E':
-			entry_addr = parse_address(optarg, "Entry");
+			entry_addr = parse_number(optarg, "Entry address", 16, 0x100, UINT16_MAX);
 			break;
 		case 'R':
 			skip_firmware = 1;
@@ -763,21 +770,21 @@ int main(int argc, char *argv[])
 			finch = 1;
 			break;
 		case 'l':
-			port = atoi(optarg);
+			port = parse_number(optarg, "Port", 10, 0, UINT16_MAX);
 			break;
 		case 's':
 			/* CPU switches */
-			cpu6_set_switches(atoi(optarg));
+			cpu6_set_switches(parse_number(optarg, "CPU switches", 10, 0, UINT_MAX));
 			break;
 		case 'S':
 			/* Diag switches */
-			switches = atoi(optarg);
+			switches = parse_number(optarg, "Diag switches", 10, 0, UINT_MAX);
 			break;
 		case 't':
-			trace = atoi(optarg);
+			trace = parse_number(optarg, "Trace mask", 10, 0, UINT_MAX);
 			break;
 		case 'T':
-			terminate_at = atol(optarg);
+			terminate_at = parse_number(optarg, "Instruction limit", 10, 0, LLONG_MAX);
 			break;
 		default:
 			usage();
@@ -820,7 +827,7 @@ int main(int argc, char *argv[])
 			printf("Raw Binary %s loaded to %04hx; entry at %04hx\n\n",
 				boot_file, load_addr, entry_addr);
 		} else {
-			entry_addr = cbin_load(boot_file, load_addr);
+			entry_addr = cbin_load(boot_file, load_addr, entry_addr);
 		}
 	}
 

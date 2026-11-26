@@ -2,7 +2,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
-#include <string.h>
 
 #include "cbin.h"
 
@@ -28,7 +27,7 @@ unsigned cbin_errored(cbin_state* cbin) {
 
 // Print common error message and mark cbin as errored
 void cbin_error(cbin_state* cbin) {
-    size_t file_offset = cbin->sector * SECTOR_SIZE + cbin->sector;
+    size_t file_offset = (size_t)cbin->sector * SECTOR_SIZE + cbin->idx;
     fprintf(stderr, " at sector %i + %x (file offset: 0x%04zx)\n",
         cbin->sector, cbin->idx, file_offset);
     fprintf(stderr, "\n%s: centurion binary format load failed\n",
@@ -50,7 +49,8 @@ static uint8_t cbin_read8(cbin_state* cbin) {
 }
 
 static uint16_t cbin_read16(cbin_state* cbin) {
-    return (cbin_read8(cbin) << 8) | cbin_read8(cbin);
+    uint16_t high = cbin_read8(cbin);
+    return (high << 8) | cbin_read8(cbin);
 }
 
 void cbin_next_sector(cbin_state* cbin) {
@@ -61,9 +61,10 @@ void cbin_next_sector(cbin_state* cbin) {
     cbin->idx = 0;
     size_t read_len = fread(cbin->buffer, 1, SECTOR_SIZE, cbin->fp);
     if (read_len != SECTOR_SIZE) {
-        if (read_len == 0) {
+        if (ferror(cbin->fp)) {
             perror("fread");
-            fprintf(stderr, "read error");
+        } else if (read_len == 0) {
+            fprintf(stderr, "unexpected end of file");
         } else {
             fprintf(stderr, "sector too small, only got %zu bytes", read_len);
         }
@@ -73,10 +74,13 @@ void cbin_next_sector(cbin_state* cbin) {
 
 struct cbin_state* cbin_open(const char *name) {
     // create state object
-    cbin_state* state = malloc(sizeof(cbin_state));
-    assert(state != NULL);
-    memset(state, 0, sizeof(cbin_state));
+    cbin_state* state = calloc(1, sizeof(cbin_state));
+    if (!state) {
+        perror("calloc");
+        exit(1);
+    }
 
+    state->name = name;
     // Open file
     state->fp = fopen(name, "rb");
 	if (state->fp == NULL) {
@@ -85,7 +89,6 @@ struct cbin_state* cbin_open(const char *name) {
 	}
 
     // Setup initial state
-    state->name = name;
     state->sector = -1; // nextsector will increment
     cbin_next_sector(state);
 
@@ -101,10 +104,7 @@ void cbin_free(cbin_state* cbin) {
 }
 
 struct cbin_record* cbin_next_record(cbin_state* cbin) {
-    if (cbin->errored)
-        return NULL;
-
-    while(1) {
+    while (!cbin->errored && !cbin->finished) {
         cbin->checksum_sum = 0;
 
         cbin->record.type = cbin_read8(cbin);
@@ -140,7 +140,7 @@ struct cbin_record* cbin_next_record(cbin_state* cbin) {
 
         if (expected != checksum) {
             fprintf(stderr, "checksum error. Got %02x, Expected %02x",
-                checksum, expected);
+                expected, checksum);
             cbin_error(cbin);
         }
 
@@ -149,4 +149,5 @@ struct cbin_record* cbin_next_record(cbin_state* cbin) {
 
         return &cbin->record;
     }
+    return NULL;
 }

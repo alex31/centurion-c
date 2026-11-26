@@ -159,6 +159,7 @@ Otherwise the emulator defaults to booting the bootstrap
 The following options can be used when running the emulator:
 
 - `-b` bootfile is raw binary
+- `-R` run a raw binary with `-b` using emulated time, without loading the bootstrap ROM. The distribution uses this mode for compiler tests.
 - `-A <addr>` bootfile will be loaded at offset <addr>
 - `-E <addr>` override entry point (only effective with a bootfile)
 - `-d` set the diag mode on

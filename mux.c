@@ -203,7 +203,6 @@ void mux_write(uint16_t addr, uint8_t val, uint32_t trace)
 
 	mode = addr & 0xf;
 	if (mode > 7) {
-		port = 0;
 		unit = card * 4;
 	} else {
 		// Data or status
@@ -213,7 +212,7 @@ void mux_write(uint16_t addr, uint8_t val, uint32_t trace)
 		unit = card * 4 + port;
 	}
 
-	if (unit > NUM_MUX_UNITS) {
+	if (unit >= NUM_MUX_UNITS) {
 		TRACE_PC("MUX%i: Write to disabled unit reg %x", unit, addr);
 		return;
 	}
@@ -236,20 +235,17 @@ void mux_write(uint16_t addr, uint8_t val, uint32_t trace)
 	/* Register 9 isn't used */
 	case 0xA: // Set interrupt request level
 		TRACE_PC("MUX%i: IRQ level = %i", unit, val);
-		irq_level = val;
+		irq_level = val & 15;
 		break;
 	case 0xB:
 		/* This configures custom baud rate */
 		TRACE_PC("MUX custom baud rate %02x", val);
 		break;
 	case 0xC:
-		/* OPSYS kernel writes unit number (starting from 1)
-		 * to this register and waits for the interrupt-driven write
-		 * to complete. We suggest that this write forces a TX_READY interrupt
-		 * on the given unit. Before doing so, the output routine actually
-		 * waits for MUX_TX_READY bit to go high using a polled loop
-		 */
-		mux[val - 1].tx_done = 1;
+		/* Each low-order bit requests a transmit interrupt on one UART. */
+		for (port = 0; port < NUM_MUX_UNITS; ++port)
+			if (val & (1u << port))
+				mux[port].tx_done = 1;
 		break;
 	case 0xD:
 	        /* Disable IRQ, the value is ignored */
@@ -281,7 +277,7 @@ uint8_t mux_read(uint16_t addr, uint32_t trace)
 	if (addr == 0xf20f) {
 		TRACE_PC("MUX: InterruptCause Read: %02x", irq_cause);
 
-		if (irq_cause & MUX_IRQ_TX) {
+		if (irq_cause >= 0 && (irq_cause & MUX_IRQ_TX)) {
 			// Reading this register is enough to clear the TX IRQ, but it seems
 			// to not clear the RX IRQ, you actually have to read the data
 			unsigned char unit = (irq_cause & MUX_UNIT_MASK) >> 1;
@@ -311,7 +307,7 @@ uint8_t mux_read(uint16_t addr, uint32_t trace)
 		mode = mode & 1;
 	}
 
-	if (unit > NUM_MUX_UNITS) {
+	if (unit >= NUM_MUX_UNITS) {
 		if (addr != 0xf20f)
 			WARN_PC("MUX%i: Read to disabled unit reg %x", unit, addr);
 		return data;

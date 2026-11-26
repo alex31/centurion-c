@@ -35,12 +35,8 @@ void schedule_event(struct event_t *event)
         }
     }
 
-    if (event->next != NULL) {
-        if (trace_schedule) {
-            fprintf(stderr, "%s was already scheduled.\n", event->name);
-        }
-        cancel_event(event);
-    }
+    // A queued tail event also has next == NULL.
+    cancel_event(event);
 
     event->scheduled_ns = scheduled;
 
@@ -90,18 +86,17 @@ void cancel_event(struct event_t *event)
 {
     struct event_t** next_ptr = &event_list;
 
-    if (trace_schedule) {
-        int64_t now = get_current_time();
-        long seconds = now / ONE_SECOND_NS;
-        long us = (now % (int64_t)ONE_SECOND_NS) / ONE_MICROSECOND_NS;
-        fprintf(stderr, "%li.%06li: Event %s canceled\n",
-                seconds, us, event->name);
-    }
-
     // find and remove event from list
     while(*next_ptr != NULL) {
         struct event_t* next = *next_ptr;
         if (next == event) {
+            if (trace_schedule) {
+                int64_t now = get_current_time();
+                long seconds = now / ONE_SECOND_NS;
+                long us = (now % (int64_t)ONE_SECOND_NS) / ONE_MICROSECOND_NS;
+                fprintf(stderr, "%li.%06li: Event %s canceled\n",
+                        seconds, us, event->name);
+            }
             *next_ptr = next->next;
             event->next = NULL;
             update_next_event();

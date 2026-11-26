@@ -136,9 +136,6 @@ void hawk_seek(struct hawk_drive* unit, unsigned fixed, unsigned cyl, unsigned h
         return;
     }
 
-    off_t offset = (cyl << 5) | (head << 4) * HAWK_SECTOR_BYTES;
-    offset *= HAWK_SECTOR_BYTES;
-
     // According to specs, the average track-to-track seek time is 7.5ms.
     // TODO: Accurate seek times
     unit->event.delta_ns = 7.5 * ONE_MILISECOND_NS;
